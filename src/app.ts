@@ -1,16 +1,19 @@
 import express from 'express'
+import { createJwksRouter } from './routes/jwks.js'
 import { createHealthRouter } from './routes/health.js'
 import { createDefaultProbes } from './services/health/probes.js'
 import trustRouter from './routes/trust.js'
 import bulkRouter from './routes/bulk.js'
+import importsRouter from './routes/imports.js'
 import { createAdminRouter } from './routes/admin/index.js'
+import { createPolicyRouter } from './routes/policy.js'
 import { createAnalyticsRouter } from './routes/analytics.js'
 import { AnalyticsService } from './services/analytics/service.js'
 import { pool } from './db/pool.js'
 import { validate } from './middleware/validate.js'
+import { requestIdMiddleware } from './middleware/requestId.js'
 import {
   buildPaginationMeta,
-  PaginationValidationError,
   parsePaginationParams,
 } from './lib/pagination.js'
 import {
@@ -26,6 +29,9 @@ import { auditLogService } from './services/audit/index.js'
 
 const app = express()
 
+// Request context and correlation IDs
+app.use(requestIdMiddleware)
+
 // Metrics endpoint for Prometheus
 app.get('/metrics', async (_req, res) => {
   res.set('Content-Type', register.contentType)
@@ -36,6 +42,10 @@ app.use(metricsMiddleware)
 app.use(compressionMetricsMiddleware)
 app.use(compressionMiddleware)
 app.use(express.json())
+
+// JWT public key set — unauthenticated, per RFC 8414 / OIDC Discovery conventions
+app.use('/.well-known/jwks.json', createJwksRouter())
+
 // Health – full readiness check with per-dependency status
 const healthProbes = createDefaultProbes()
 app.use('/api/health', createHealthRouter(healthProbes))
@@ -63,7 +73,7 @@ app.get(
 app.get(
   '/api/attestations/:address',
   validate({ params: attestationsPathParamsSchema }),
-  (req, res) => {
+  (req, res, next) => {
     const { address } = req.validated!.params! as { address: string }
     try {
       const { page, limit, offset } = parsePaginationParams(req.query as Record<string, unknown>)
@@ -74,15 +84,7 @@ app.get(
         ...buildPaginationMeta(0, page, limit),
       })
     } catch (error) {
-      if (error instanceof PaginationValidationError) {
-        res.status(400).json({
-          error: 'Validation failed',
-          details: error.details,
-        })
-        return
-      }
-
-      throw error
+      next(error)
     }
   },
 )
@@ -104,8 +106,15 @@ app.post(
 // Bulk verification (enterprise)
 app.use('/api/bulk', bulkRouter)
 
+// Import preview (enterprise)
+app.use('/api/imports', importsRouter)
+
 // Admin API
 app.use('/api/admin', createAdminRouter())
+app.use('/api/admin/webhooks', createWebhookAdminRouter())
+
+// Policy engine – fine-grained org permissions
+app.use('/api/orgs/:orgId/policies', createPolicyRouter())
 
 // Webhook management (secret rotation, etc.)
 const webhookStore = new MemoryWebhookStore()
@@ -116,5 +125,8 @@ const analyticsService = process.env.DATABASE_URL
   ? new AnalyticsService(pool, analyticsThresholdSeconds)
   : undefined
 app.use('/api/analytics', createAnalyticsRouter(analyticsService))
+
+// Final error handler
+app.use(errorHandler)
 
 export default app
