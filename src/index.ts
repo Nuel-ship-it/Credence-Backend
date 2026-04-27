@@ -10,6 +10,10 @@ import { AnalyticsService } from './services/analytics/service.js'
 import { AnalyticsRefreshWorker, getAnalyticsRefreshIntervalMs } from './jobs/analyticsRefreshWorker.js'
 import { keyManager } from './services/keyManager/index.js'
 
+// Outbox imports
+import { OutboxJob } from './jobs/outbox.js'
+import { auditLogService } from './services/audit/index.js'
+
 app.use('/api/admin', createAdminRouter())
 app.use('/api/governance', governanceRouter)
 app.use('/api/disputes', disputesRouter)
@@ -53,6 +57,18 @@ if (process.env.NODE_ENV !== 'test') {
       setInterval(() => {
         void tick()
       }, intervalMs)
+    }
+
+    // Start Outbox Publisher job if enabled
+    if (config.outbox.enabled) {
+      try {
+        const outboxJob = new OutboxJob(pool)
+        await outboxJob.start()
+        console.log('[Main] Outbox Publisher started')
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error'
+        console.error(`Failed to start Outbox Publisher: ${message}`)
+      }
     }
   } catch (error) {
     console.error('Failed to start Credence API:', error)
