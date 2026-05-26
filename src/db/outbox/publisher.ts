@@ -2,6 +2,7 @@ import { pool } from '../pool.js'
 import { OutboxRepository } from './repository.js'
 import type { OutboxEvent, OutboxCleanupConfig } from './types.js'
 import { randomUUID } from 'crypto'
+import { incrementOutboxDeadLetter } from '../../observability/outboxMetrics.js'
 
 /**
  * Event handler that processes published domain events.
@@ -216,7 +217,20 @@ export class OutboxPublisher {
         `[OutboxPublisher] Failed to publish event ${event.id} (${event.eventType}):`,
         errorMessage
       )
-      await this.repository.markFailed(pool, event.id, errorMessage)
+      try {
+        const result = await this.repository.markFailed(pool, event.id, errorMessage)
+        if (result?.status === 'dead_letter') {
+          // Normalize a short error code for metrics
+          const code = (errorMessage.split(/\s+/)[0] || 'UNKNOWN')
+            .toUpperCase()
+            .replace(/[^A-Z0-9_]/g, '_')
+            .slice(0, 50)
+          incrementOutboxDeadLetter(code)
+          console.warn(`[OutboxPublisher] Event ${event.id} moved to dead-letter`)
+        }
+      } catch (err) {
+        console.error('[OutboxPublisher] Error marking event failed:', err)
+      }
     }
   }
 
