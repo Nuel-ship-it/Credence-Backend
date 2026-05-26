@@ -1,9 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createTestDatabase, createTestCache, type TestDatabase, type TestCache } from './testDatabase.js'
 import { runMigration } from '../../src/migrations/runner.js'
-import { subscribeBondCreationEvents } from '../../src/listeners/horizonBondEvents.js'
-import { getTrustScore } from '../../src/services/reputationService.js'
-import { pool } from '../../src/db/pool.js'
+
+// We need to define these variables here so they are available in the test scope
+let db: TestDatabase
+let cache: TestCache
+
+// We mock the pool and cache after setting up the environment in beforeAll
+// or we can use dynamic imports inside the tests.
+// For integration tests, dynamic imports are often cleaner for singletons.
 
 // Mock Horizon Stream
 const streamState = {
@@ -29,16 +34,12 @@ vi.mock('@stellar/stellar-sdk', () => {
 })
 
 describe('E2E State Sync Integration: Horizon -> DB -> Trust -> Cache', () => {
-  let db: TestDatabase
-  let cache: TestCache
-
   beforeAll(async () => {
     // 1. Start Postgres and Redis containers
     db = await createTestDatabase()
     cache = await createTestCache()
 
     // 2. Point current pool and cache to our test containers
-    // We override process.env because the pool and cache singletons use them
     process.env.DB_URL = db.connectionString
     process.env.REDIS_URL = cache.connectionString
 
@@ -51,6 +52,7 @@ describe('E2E State Sync Integration: Horizon -> DB -> Trust -> Cache', () => {
         migrationsTable: 'pgmigrations',
         migrationsSchema: 'public',
         createSchema: true,
+        transactional: true,
       },
       skipPreflight: true,
     })
@@ -58,7 +60,7 @@ describe('E2E State Sync Integration: Horizon -> DB -> Trust -> Cache', () => {
     if (!migrationResult.success) {
       throw new Error(`Migrations failed: ${migrationResult.error}`)
     }
-  }, 60000) // Increase timeout for Testcontainers pull/start
+  }, 60000)
 
   afterAll(async () => {
     if (db) await db.close()
@@ -66,6 +68,10 @@ describe('E2E State Sync Integration: Horizon -> DB -> Trust -> Cache', () => {
   })
 
   it('syncs a Horizon bond event to the database and reflects in trust score', async () => {
+    // Dynamic imports to ensure singletons pull correct env vars
+    const { subscribeBondCreationEvents } = await import('../../src/listeners/horizonBondEvents.js')
+    const { getTrustScore } = await import('../../src/services/reputationService.js')
+
     const address = 'GABC123EXAMPLE'
     const bondId = 'bond_xyz'
     const amount = '2000000000000000000' // 2 ETH in wei
@@ -97,9 +103,6 @@ describe('E2E State Sync Integration: Horizon -> DB -> Trust -> Cache', () => {
     // 4. Verify Trust Score Endpoint (via service)
     const trustScore = await getTrustScore(address)
     expect(trustScore).not.toBeNull()
-    expect(trustScore?.score).toBeGreaterThan(0)
-    // 2 ETH = 50 pts, 365 days = ~0 pts (duration starts now)
-    // Total should be around 50 + 0 + 0 = 50
     expect(trustScore?.score).toBe(50)
 
     // 5. Verify Cache Population
@@ -125,10 +128,12 @@ describe('E2E State Sync Integration: Horizon -> DB -> Trust -> Cache', () => {
 
     // Fetching again should return the updated score
     const updatedTrustScore = await getTrustScore(address)
-    expect(updatedTrustScore?.score).toBe(50) // Still 50 because BOND_SCORE_MAX is 50
+    expect(updatedTrustScore?.score).toBe(50)
   })
 
   it('handles idempotency (duplicate events)', async () => {
+    const { subscribeBondCreationEvents } = await import('../../src/listeners/horizonBondEvents.js')
+    
     const address = 'GDUP123EXAMPLE'
     const bondId = 'bond_dup'
     
@@ -151,6 +156,7 @@ describe('E2E State Sync Integration: Horizon -> DB -> Trust -> Cache', () => {
   })
 
   it('returns 404/null for missing identity', async () => {
+    const { getTrustScore } = await import('../../src/services/reputationService.js')
     const trustScore = await getTrustScore('GNOTFOUND')
     expect(trustScore).toBeNull()
   })
