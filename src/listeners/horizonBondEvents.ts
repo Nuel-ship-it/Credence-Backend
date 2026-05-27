@@ -35,19 +35,10 @@ const lastCheckpointGauge = new Gauge({
  * @param {Pool} pool PostgreSQL connection pool for cursor persistence
  * @param {function} onEvent Callback for each bond creation event
  */
-export async function subscribeBondCreationEvents(
-  pool: Pool,
-  onEvent?: (event: { identity: { id: string }; bond: { id: string; amount: string; duration: string | null } }) => void
-) {
-  const cursorRepo = new CursorRepository(pool)
-  
-  // Load saved cursor on startup, fall back to 'now' on first run
-  const savedCursor = await cursorRepo.findByStreamName(STREAM_NAME)
-  let cursor = savedCursor?.pagingToken || 'now'
-  
-  console.log(`[${STREAM_NAME}] Starting Horizon listener from cursor: ${cursor}`)
-  
-  let stream: any
+export function subscribeBondCreationEvents(onEvent?: (event: { identity: { id: string }; bond: { id: string; address: string; amount: string; duration: string | null } }) => void) {
+  // Example: Listen to operations of type 'create_bond' (custom event)
+  let cursor = 'now';
+  let stream;
   const startStream = () => {
     stream = (server.operations() as any)
       .forAsset('BOND') // Replace with actual asset code if needed
@@ -92,10 +83,9 @@ export async function subscribeBondCreationEvents(
             startStream() // Reconnect after delay, resuming from last successful cursor
           }, 5000)
         }
-      })
-  }
-  
-  startStream()
+      });
+  };
+  startStream();
 }
 
 /**
@@ -131,6 +121,7 @@ function parseBondEvent(op: { source_account: string; id: string; amount: string
     identity: { id: op.source_account },
     bond: {
       id: op.id,
+      address: op.source_account,
       amount: op.amount,
       duration: op.duration ?? null,
     },

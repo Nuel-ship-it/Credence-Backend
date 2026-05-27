@@ -119,9 +119,46 @@ export function computeTrustScore(
 /**
  * Look up an identity by address and return its computed trust score,
  * or null when no record exists.
+ * Uses Redis cache and Postgres DB.
  */
-export function getTrustScore(address: string): TrustScore | null {
-  const identity = getIdentity(address)
-  if (!identity) return null
-  return computeTrustScore(identity)
+export async function getTrustScore(address: string): Promise<TrustScore | null> {
+  const cacheKey = address.toLowerCase()
+  
+  // 1. Try cache
+  const cached = await cache.get<TrustScore>('trust', cacheKey)
+  if (cached) return cached
+
+  // 2. Try DB
+  const idResult = await pool.query(
+    `SELECT address, bonded_amount as "bondedAmount", 
+            bond_start as "bondStart"
+     FROM identities
+     WHERE address = $1`,
+    [address]
+  )
+
+  if (idResult.rows.length === 0) {
+    return null
+  }
+
+  const row = idResult.rows[0]
+  const attResult = await pool.query(
+    'SELECT COUNT(*)::int as count FROM attestations WHERE subject_address = $1',
+    [address]
+  )
+  const attestationCount = parseInt(attResult.rows[0]?.count || '0', 10)
+  const record: IdentityRecord = { ...row, attestationCount }
+  const trustScore = computeTrustScoreFromRecord(record)
+
+  // 3. Save to cache (TTL 1 hour)
+  await cache.set('trust', cacheKey, trustScore, 3600)
+
+  return trustScore
+}
+
+/**
+ * Invalidate the trust score cache for a given address.
+ */
+export async function invalidateTrustScoreCache(address: string): Promise<void> {
+  await cache.delete('trust', address.toLowerCase())
 }

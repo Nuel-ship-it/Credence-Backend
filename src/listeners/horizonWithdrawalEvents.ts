@@ -1,24 +1,9 @@
 import { Horizon } from '@stellar/stellar-sdk'
-import { CursorRepository } from '../db/repositories/cursorRepository.js'
-import type { Pool } from 'pg'
-import { register, Gauge } from 'prom-client'
-
-const STREAM_NAME = 'bond_withdrawal'
-
-// Prometheus metrics for cursor monitoring
-const cursorLagGauge = new Gauge({
-  name: 'horizon_listener_cursor_lag_seconds',
-  help: 'Time elapsed since last Horizon cursor checkpoint',
-  labelNames: ['stream_name'],
-  registers: [register]
-})
-
-const lastCheckpointGauge = new Gauge({
-  name: 'horizon_listener_last_checkpoint_timestamp',
-  help: 'Unix timestamp of last Horizon cursor checkpoint',
-  labelNames: ['stream_name'],
-  registers: [register]
-})
+import {
+  recordHorizonListenerHeartbeat,
+  setHorizonListenerConfigured,
+  setHorizonListenerRunning,
+} from '../services/health/runtimeState.js'
 
 /**
  * Interface for bond withdrawal event data
@@ -91,13 +76,12 @@ export class HorizonWithdrawalListener {
   private pollTimer?: NodeJS.Timeout
   private lastCursor: string
   private replayService: { captureFailure: (type: string, data: any, reason: string) => Promise<any> }
-  private cursorRepo: CursorRepository
-  private pool: Pool
 
   constructor(
-    config: HorizonListenerConfig, 
-    replayService: { captureFailure: (type: string, data: any, reason: string) => Promise<any> },
-    pool: Pool
+    config: HorizonListenerConfig,
+    replayService: { captureFailure: (type: string, data: any, reason: string) => Promise<any> } = {
+      captureFailure: async () => ({}),
+    },
   ) {
     this.config = config
     this.server = new Horizon.Server(config.horizonUrl)
@@ -105,6 +89,7 @@ export class HorizonWithdrawalListener {
     this.cursorRepo = new CursorRepository(pool)
     this.lastCursor = config.lastCursor || 'now'
     this.replayService = replayService
+    setHorizonListenerConfigured(true)
   }
 
   /**
@@ -127,6 +112,8 @@ export class HorizonWithdrawalListener {
     }
 
     this.isRunning = true
+    setHorizonListenerRunning(true)
+    recordHorizonListenerHeartbeat(this.lastCursor)
     console.log(`Starting Horizon withdrawal listener for ${this.config.horizonUrl}`)
 
     // Start polling for events
@@ -142,6 +129,7 @@ export class HorizonWithdrawalListener {
     }
 
     this.isRunning = false
+    setHorizonListenerRunning(false)
     
     if (this.pollTimer) {
       clearTimeout(this.pollTimer)
@@ -202,6 +190,9 @@ export class HorizonWithdrawalListener {
         // Update metrics after batch processing
         await this.updateMetrics()
       }
+
+      // Poll completed and cursor is current; mark heartbeat.
+      recordHorizonListenerHeartbeat(this.lastCursor)
 
     } catch (error) {
       console.error('Error polling for withdrawal events:', error)
