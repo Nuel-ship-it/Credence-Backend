@@ -85,3 +85,32 @@ groups:
         annotations:
           summary: "High bulk verification failure rate"
           description: "Bulk verification failure rate is {{ $value | humanizePercentage }}"
+
+      # Pool saturation — connections exhausted
+      - alert: PgPoolSaturation
+        expr: |
+          pg_pool_waiting_count{job="credence-backend", pool="api"} > 0
+        for: 2m
+        labels:
+          severity: warning
+          service: credence-backend
+        annotations:
+          summary: "PostgreSQL connection pool saturated"
+          description: >-
+            API pool has {{ $value }} requests queued waiting for a
+            connection for >2 minutes. Consider increasing DB_POOL_MAX
+            or investigating slow queries.
+
+      # Worker pool saturation
+      - alert: PgWorkerPoolSaturation
+        expr: |
+          pg_pool_waiting_count{job="credence-backend", pool="worker"} > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: credence-backend
+        annotations:
+          summary: "Worker connection pool saturated"
+          description: >-
+            Worker pool has {{ $value }} jobs queued waiting for a
+            connection for >5 minutes.

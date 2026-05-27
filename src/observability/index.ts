@@ -21,3 +21,5 @@ export {
   createSlowOperationEvent,
   createSuccessEvent,
 } from './timeoutMetrics.js'
+
+export { registerPoolMetrics } from './poolMetrics.js'
