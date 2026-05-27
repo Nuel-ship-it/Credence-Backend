@@ -31,3 +31,10 @@ export {
   type WithdrawalEventPayload,
   type BondCreationEventPayload,
 } from './queue.js'
+export {
+  REPORT_TYPES,
+  reportTypeSchema,
+  createReportBodySchema,
+  type ReportType,
+  type CreateReportBody,
+} from './report.js'
