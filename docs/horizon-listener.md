@@ -441,12 +441,36 @@ subscribeBondCreationEvents((event) => {
 - All functions are documented with JSDoc comments in `src/listeners/horizonBondEvents.ts`
 
 ## Requirements
-- Minimum 95% test coverage
-- Clear documentation
+ - Minimum 95% test coverage
+ - Clear documentation
 
 ## Backfill & Reconnection
-- Listener automatically reconnects on errors
-- Backfill logic can be extended to fetch missed events
+ - Listener automatically reconnects on errors
+ - Backfill logic can be extended to fetch missed events
+
+## Event Validation
+The bond creation listener now includes comprehensive validation of incoming Horizon operations to prevent processing malformed or unexpected payloads:
+
+### Validation Features
+- **Stellar Account Validation**: Ensures `source_account` is a valid Stellar account ID using StrKey validation
+- **Amount Validation**: Verifies `amount` is a non-negative integer string
+- **Operation ID**: Ensures `id` is present and non-empty
+- **Duration Validation**: Accepts string or null values for `duration`
+- **Schema Validation**: Uses Zod schemas for robust validation of all required fields
+
+### Error Handling
+When validation fails:
+- The malformed operation is sent to the `failed_inbound_events` table for inspection
+- The cursor is **not** advanced, allowing for manual inspection and potential reprocessing
+- Processing continues with the next operation in the stream
+
+### Validation Failure Examples
+Operations that will be quarantined:
+- Missing `source_account` field
+- Invalid Stellar account ID in `source_account`
+- Missing `amount` field
+- Non-numeric or negative `amount` values
+- Missing `operation ID`
 
 ---
 For further details, see the code and tests.
