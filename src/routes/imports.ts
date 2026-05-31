@@ -8,9 +8,45 @@ import {
 
 const router = Router()
 
+/** Accepted MIME types for CSV uploads. */
+const ALLOWED_MIME_TYPES = new Set([
+  'text/csv',
+  'text/plain',
+  'application/csv',
+  'application/vnd.ms-excel', // some clients send this for .csv
+])
+
+/** Accepted file extensions (lower-cased). */
+const ALLOWED_EXTENSIONS = new Set(['.csv'])
+
+/**
+ * multer fileFilter — rejects uploads whose MIME type or file extension is not
+ * in the allow-list before any bytes are written to memory.
+ */
+function csvFileFilter(
+  _req: Request,
+  file: Express.Multer.File,
+  cb: multer.FileFilterCallback
+): void {
+  const ext = file.originalname.slice(file.originalname.lastIndexOf('.')).toLowerCase()
+  if (ALLOWED_MIME_TYPES.has(file.mimetype) || ALLOWED_EXTENSIONS.has(ext)) {
+    cb(null, true)
+  } else {
+    // Pass a typed error so handleUploadError can return a clean 415
+    const err = Object.assign(new Error('Only CSV files are accepted.'), {
+      code: 'INVALID_FILE_TYPE',
+    }) as Error & { code: string }
+    cb(err)
+  }
+}
+
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: IMPORT_PREVIEW_MAX_FILE_BYTES },
+  limits: {
+    fileSize: IMPORT_PREVIEW_MAX_FILE_BYTES,
+    files: 1, // reject multi-file uploads
+  },
+  fileFilter: csvFileFilter,
 })
 
 function handleUploadError(
@@ -28,6 +64,14 @@ function handleUploadError(
       })
       return
     }
+    if (err.code === 'LIMIT_FILE_COUNT') {
+      res.status(400).json({
+        error: 'InvalidRequest',
+        code: 'TooManyFiles',
+        message: 'Only one file may be uploaded per request.',
+      })
+      return
+    }
     res.status(400).json({
       error: 'InvalidRequest',
       code: 'UploadError',
@@ -35,6 +79,20 @@ function handleUploadError(
     })
     return
   }
+
+  // fileFilter rejection — non-CSV content type
+  if (
+    err instanceof Error &&
+    (err as any).code === 'INVALID_FILE_TYPE'
+  ) {
+    res.status(415).json({
+      error: 'UnsupportedMediaType',
+      code: 'InvalidFileType',
+      message: 'Only CSV files are accepted. Please upload a .csv file.',
+    })
+    return
+  }
+
   next(err)
 }
 
